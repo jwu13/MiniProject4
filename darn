@@ -1,0 +1,183 @@
+---
+title: "What makes a movie profitable?"
+author: "Irene Xu, Junru Wu, & Sarah Wu"
+date: "5/19/2019"
+output: 
+  html_document:
+    code_folding: hide
+    df_print: paged
+    theme: "flatly"
+---
+```{r, message=FALSE}
+library(tidyverse)
+library(RMySQL)
+library(DBI)
+library(dplyr)
+library(dbplyr)
+library(strip)
+library(taRifx)
+library(extrafont)
+library(ggthemes)
+db <- dbConnect(MySQL(), 
+                host = "scidb.smith.edu", 
+                user = "mth292", 
+                password = "RememberPi", 
+                dbname = "imdb")
+knitr::opts_chunk$set(connection = db, max.print = 20)
+```
+
+#### Import tables
+```{r message = FALSE, warning = FALSE}
+gross_usa <- db %>% dbGetQuery(
+"SELECT title, movie_info.info AS gross
+FROM aka_title
+LEFT JOIN kind_type ON  aka_title.kind_id =  kind_type.id
+LEFT JOIN movie_info ON aka_title.movie_id = movie_info.movie_id
+WHERE kind = 'movie'
+AND info_type_id = '107' 
+AND movie_info.info LIKE '%(USA)%'
+GROUP BY title;")
+
+budget <- db %>% dbGetQuery(
+"SELECT title, production_year, movie_info.info AS budget
+FROM aka_title   
+LEFT JOIN movie_companies ON aka_title.movie_id = movie_companies.movie_id
+LEFT JOIN movie_info ON movie_companies.movie_id = movie_info.movie_id 
+LEFT JOIN kind_type ON  aka_title.kind_id =  kind_type.id
+WHERE kind = 'movie'
+AND info_type_id='105'
+GROUP BY title;")
+
+genre <- db %>% dbGetQuery(
+"SELECT title, movie_info.info AS genre
+FROM aka_title
+LEFT JOIN kind_type ON  aka_title.kind_id =  kind_type.id
+LEFT JOIN movie_info ON aka_title.movie_id = movie_info.movie_id
+WHERE kind = 'movie'
+AND info_type_id = '3' 
+GROUP BY title;")
+```
+
+```{r}
+gross_usa$gross_dollar <- parse_number(as.character(gross_usa$gross)) 
+
+table1 <- budget %>%
+  left_join(genre, by = c("title" = "title")) %>%
+  left_join(gross_usa, by = c("title" = "title")) 
+table1$budget <- destring(gsub("$", "", table1$budget))
+
+table1 <- table1 %>%
+  select(-gross) %>%
+  mutate(profit = gross_dollar - budget) %>%
+  filter(!is.na(profit))
+
+table2 <- table1 %>%
+  filter(!is.na(genre)) %>%
+  group_by(genre) %>%
+  summarize(mean_gross = mean(gross_dollar), n = n())
+
+table2 <- table1 %>%
+  filter(!is.na(genre)) %>%
+  group_by(genre) %>%
+  summarize(mean_gross = mean(gross_dollar), n = n(), mean_profit = mean(profit))
+```
+
+
+
+###plot a bar graph on gross box office and genre
+```{r}
+gross_and_genre_plot <- ggplot(table2, aes(x = reorder(genre, mean_gross), y = mean_gross)) +
+  geom_bar(stat = "identity",aes(fill = mean_gross), show.legend = FALSE) +
+  coord_flip() +
+  ggtitle("How Genres Affect Movies' Total Box Office") +
+  theme(panel.background = element_rect(fill = "#FFFFFF"), 
+        axis.text.x = element_text(size = 9),
+        axis.text.y = element_text(size = 9)) +
+  scale_x_discrete("Genre") +
+  scale_y_continuous("Mean Gross Box Office (Millions)", labels = c("0", "20", "40", "60", "80")) +
+  scale_fill_continuous(low = "#C7CEF6", high = "#7496D2")
+gross_and_genre_plot
+```
+
+###plot a bar graph on profit and genre
+```{r}
+profit_and_genre_plot <- ggplot(table2, aes(x = reorder(genre, mean_profit), y = mean_profit)) +
+  geom_bar(stat = "identity",aes(fill = mean_profit), show.legend = FALSE) +
+  coord_flip() +
+  ggtitle("How Genres Affect Movies' Profit") +
+  theme(panel.background = element_rect(fill = "#FFFFFF"), 
+        axis.text.x = element_text(size = 9),
+        axis.text.y = element_text(size = 9)) +
+  scale_x_discrete("Genre") +
+  scale_y_continuous("Mean Profit (Million)", label = c("-200", "-150", "-100", "-50", "0", "50")) +
+  scale_fill_continuous(low = "#C7CEF6", high = "#7496D2")
+profit_and_genre_plot
+```
+
+```{r}
+table3 <- table2 %>%
+  filter(mean_profit >= 0)
+
+profit_and_genre_plot <- ggplot(table3, aes(x = reorder(genre, mean_profit), y = mean_profit)) +
+  geom_bar(stat = "identity",aes(fill = mean_profit), show.legend = FALSE) +
+  coord_flip() +
+  ggtitle("How Genres Affect Movies' Profit") +
+  theme(panel.background = element_rect(fill = "#FFFFFF"), 
+        axis.text.x = element_text(size = 9),
+        axis.text.y = element_text(size = 9)) +
+  scale_x_discrete("Genre") +
+  scale_y_continuous("Mean Profit (Million)", labels = c("0", "10", "20", "30")) +
+  scale_fill_continuous(low = "#C7CEF6", high = "#7496D2") 
+
+profit_and_genre_plot
+```
+
+###formulate a table of profit and production year
+```{r  message = FALSE, warning = FALSE}
+profit_and_year <- gross_usa %>%
+  inner_join(budget, by = c("title" = "title")) %>%
+  inner_join(genre, by = c("title" = "title"))
+profit_and_year$budget <- destring(gsub("$", "", profit_and_year$budget))
+```
+
+###formulate a table of profit and production year specific to Animation
+```{r  message = FALSE, warning = FALSE}
+ profit_and_year_animation <- profit_and_year %>%
+  filter(genre == "Animation") %>%
+  group_by(production_year) %>%
+  summarise(average_profit = mean(gross_dollar - budget))
+```
+
+###plot a graph to show the trend of average movie profit overtime
+```{r  message = FALSE, warning = FALSE}
+profit_and_year_animation %>%
+  plot_ly(x = ~production_year, y = ~average_profit, hoverinfo = "text", text = ~production_year) %>%
+   layout(title= "Trend of Animation Movie Profit From 1920-2017", 
+          xaxis = list(title= "Production Year"), 
+          yaxis = list(title = "Average Profit")) 
+```
+
+###recover the table of profit and production year
+```{r  message = FALSE, warning = FALSE}
+profit_and_year <- gross_usa %>%
+  inner_join(budget, by = c("title" = "title")) %>%
+  inner_join(genre, by = c("title" = "title"))
+profit_and_year$budget <- destring(gsub("$", "", profit_and_year$budget))
+```
+
+###formulate a table of profit and production year specific to Film-Noir
+```{r  message = FALSE, warning = FALSE}
+ profit_and_year_noir <- profit_and_year %>%
+  filter(genre == "Film-Noir") %>%
+  group_by(production_year) %>%
+  summarise(average_profit = mean(gross_dollar - budget))
+```
+
+###plot a graph to show the trend of average movie profit overtime
+```{r  message = FALSE, warning = FALSE}
+profit_and_year_noir %>%
+  plot_ly(x = ~production_year, y = ~average_profit, hoverinfo = "text", text = ~production_year) %>%
+   layout(title= "Trend of 'Film-Noir' Movies Profit From 1920-2017", 
+          xaxis = list(title= "Production Year"), 
+          yaxis = list(title = "Average Profit")) 
+```
